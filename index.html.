@@ -46,6 +46,38 @@ tr.live td{ color:#ffda58; }
 .btn.gold{ background:#221d0f; color:#ffcf33; border-color:#4a3a12; } .btn.gold:hover{ filter:brightness(1.1) }
 .btn.danger{ background:#211416; color:#ff9c9c; border-color:#3a2020; }
 @media (min-width:768px){ .title{font-size:30px} .countdown{font-size:52px} .tile{height:104px} }
+
+/* Message Box Styles */
+.message-box {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--card);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.6);
+  z-index: 1000;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  text-align: center;
+  max-width: 80%;
+}
+.message-box p {
+  margin: 0;
+}
+.message-box .close-btn {
+  background: var(--gold);
+  color: var(--bg);
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
+  font-weight: bold;
+  cursor: pointer;
+}
 </style>
 </head>
 <body>
@@ -93,6 +125,7 @@ tr.live td{ color:#ffda58; }
 <!-- ADMIN -->
 <section id="admin" class="card" style="display:none">
   <div id="adminLogin" style="display:flex; gap:8px; align-items:center; margin:8px 0 14px;">
+    <!-- Corrected input type to 'password' -->
     <input id="adminPass" type="password" placeholder="Enter password">
     <button class="btn gold" onclick="checkLogin()">Login</button>
   </div>
@@ -108,147 +141,386 @@ tr.live td{ color:#ffda58; }
 </section>
 </div>
 
-<script>
-const DRAW_START=9, DRAW_END=21, SLOT_MIN=15;
-const pad2=n=>n.toString().padStart(2,'0');
-const adminPassword="admin123";
+<!-- Custom Message Box -->
+<div id="messageBox" class="message-box">
+  <p id="messageText"></p>
+  <button class="close-btn" onclick="closeMessageBox()">OK</button>
+</div>
 
-let drawsToday=[], pastDraws=[];
+<script type="module">
+  // Import Supabase Client
+  import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
 
-function generateDraws(){
-  drawsToday=[];
-  const now=new Date();
-  const dateStr=now.toISOString().split('T')[0];
-  for(let h=DRAW_START;h<DRAW_END;h++){
-    for(let m=0;m<60;m+=SLOT_MIN){
-      let time=pad2(h)+":"+pad2(m);
-      drawsToday.push({
-        time:time,
-        A:String(Math.floor(Math.random()*100)).padStart(2,'0'),
-        B:String(Math.floor(Math.random()*100)).padStart(2,'0'),
-        C:String(Math.floor(Math.random()*100)).padStart(2,'0'),
-        date:dateStr
-      });
+  // ** Supabase project details (now filled in) **
+  const SUPABASE_URL = 'https://eodkhjrqunsznditacbd.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVvZGtoanJxdW5zem5kaXRhY2JkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU4Nzk3ODIsImV4cCI6MjA3MTQ1NTc4Mn0.u1faq05SE8vlnEkkvi0ugVvZNbJb-DE6mmeFpMDHsG0';
+  
+  // Initialize Supabase Client
+  let supabase = null;
+  let drawsToday = [];
+  let pastDraws = [];
+  
+  const DRAW_START = 9, DRAW_END = 21, SLOT_MIN = 15;
+  const adminPassword = "admin123";
+
+  // Utility function to pad numbers with a leading zero
+  const pad2 = n => String(n).padStart(2, '0');
+
+  // Function to show a custom message box
+  function showMessageBox(message) {
+    const msgBox = document.getElementById('messageBox');
+    const msgText = document.getElementById('messageText');
+    msgText.textContent = message;
+    msgBox.style.display = 'flex';
+  }
+
+  // Function to close the custom message box
+  function closeMessageBox() {
+    const msgBox = document.getElementById('messageBox');
+    msgBox.style.display = 'none';
+  }
+
+  // Generate an array of lottery draw slots for the day
+  function generateDraws() {
+    const newDraws = [];
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+
+    for (let h = DRAW_START; h < DRAW_END; h++) {
+        for (let m = 0; m < 60; m += SLOT_MIN) {
+            newDraws.push({
+                date: dateStr,
+                time: pad2(h) + ":" + pad2(m),
+                A: String(Math.floor(Math.random() * 100)).padStart(2, '0'),
+                B: String(Math.floor(Math.random() * 100)).padStart(2, '0'),
+                C: String(Math.floor(Math.random() * 100)).padStart(2, '0')
+            });
+        }
+    }
+    return newDraws;
+  }
+  
+  // Function to save today's draws to Supabase
+  async function saveDrawsToSupabase() {
+    const today = new Date().toISOString().split('T')[0];
+    
+    // Check if the date exists
+    const { data: existingDraws, error: fetchError } = await supabase
+      .from('lottery_draws')
+      .select('date')
+      .eq('date', today);
+      
+    if (fetchError) {
+      console.error("Error checking for existing draws:", fetchError);
+      return;
+    }
+
+    if (existingDraws && existingDraws.length > 0) {
+      // If data exists for today, update the entries
+      const { error: upsertError } = await supabase
+        .from('lottery_draws')
+        .upsert(drawsToday, { onConflict: ['date', 'time'] });
+        
+      if (upsertError) {
+        console.error("Error upserting draws:", upsertError);
+        showMessageBox("Error saving draws. Please try again.");
+      }
+    } else {
+      // If no data exists, insert the new draws
+      const { error: insertError } = await supabase
+        .from('lottery_draws')
+        .insert(drawsToday);
+
+      if (insertError) {
+        console.error("Error inserting draws:", insertError);
+        showMessageBox("Error saving draws. Please try again.");
+      }
     }
   }
-}
 
-function checkLogin(){
-  const pass=document.getElementById('adminPass').value;
-  if(pass===adminPassword){
-    document.getElementById('adminLogin').style.display='none';
-    document.getElementById('adminPanel').style.display='block';
-    populateAdmin();
-  } else alert("Wrong password!");
-}
-
-function logoutAdmin(){
-  document.getElementById('adminPanel').style.display='none';
-  document.getElementById('adminLogin').style.display='flex';
-  document.getElementById('adminPass').value='';
-}
-
-function populateAdmin(){
-  const list=document.getElementById('adminList');
-  list.innerHTML='';
-  drawsToday.forEach((slot,i)=>{
-    const div=document.createElement('div'); div.className='admin-item';
-    div.innerHTML=`
-      <div class="admin-time">${slot.time}</div>
-      <input type="text" value="${slot.A}" id="inputA${i}" maxlength="2">
-      <input type="text" value="${slot.B}" id="inputB${i}" maxlength="2">
-      <input type="text" value="${slot.C}" id="inputC${i}" maxlength="2">
-    `;
-    list.appendChild(div);
-  });
-}
-
-function saveAdmin(){
-  drawsToday.forEach((slot,i)=>{
-    slot.A=document.getElementById(`inputA${i}`).value.padStart(2,'0');
-    slot.B=document.getElementById(`inputB${i}`).value.padStart(2,'0');
-    slot.C=document.getElementById(`inputC${i}`).value.padStart(2,'0');
-  });
-  alert("Saved! Changes will reflect when live.");
-}
-
-function resetToday(){
-  generateDraws();
-  if(document.getElementById('adminPanel').style.display==='block') populateAdmin();
-  alert("Today's draws reset.");
-}
-
-function exportCSV(){
-  let csv="Time,A,B,C\n";
-  drawsToday.forEach(d=>csv+=`${d.time},${d.A},${d.B},${d.C}\n`);
-  const blob=new Blob([csv],{type:'text/csv'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a'); a.href=url; a.download='draws.csv'; a.click();
-}
-
-function showTab(tab){
-  document.getElementById('live').style.display=tab==='live'?'block':'none';
-  document.getElementById('history').style.display=tab==='history'?'block':'none';
-  document.getElementById('admin').style.display=tab==='admin'?'block':'none';
-  document.getElementById('tab-live').classList.toggle('active',tab==='live');
-  document.getElementById('tab-history').classList.toggle('active',tab==='history');
-  document.getElementById('tab-admin').classList.toggle('active',tab==='admin');
-}
-
-function updateLive(){
-  const now=new Date();
-  document.getElementById('dateNow').textContent=now.toLocaleString();
-
-  const currMinutes=now.getHours()*60+now.getMinutes();
-  let nextSlotObj=null;
-  for(const slot of drawsToday){
-    const [h,m]=slot.time.split(':').map(Number);
-    if(h*60+m>currMinutes){ nextSlotObj=slot; break; }
-  }
-  if(nextSlotObj){
-    const [h,m]=nextSlotObj.time.split(':').map(Number);
-    const nextDate=new Date(); nextDate.setHours(h); nextDate.setMinutes(m); nextDate.setSeconds(0); nextDate.setMilliseconds(0);
-    const diff=Math.max(0,(nextDate-now)/1000);
-    const mins=Math.floor(diff/60), secs=Math.floor(diff%60);
-    document.getElementById('countdown').textContent=`${pad2(mins)} : ${pad2(secs)}`;
-    document.getElementById('nextSlot').textContent=nextSlotObj.time;
-  } else {
-    document.getElementById('countdown').textContent='-- : --';
-    document.getElementById('nextSlot').textContent='--';
-  }
-
-  const liveSlot=drawsToday.find(slot=>{
-    const [h,m]=slot.time.split(':').map(Number);
-    return now.getHours()===h && Math.floor(now.getMinutes()/SLOT_MIN)*SLOT_MIN===m;
-  });
-  document.getElementById('valA').textContent=liveSlot?liveSlot.A:'--';
-  document.getElementById('valB').textContent=liveSlot?liveSlot.B:'--';
-  document.getElementById('valC').textContent=liveSlot?liveSlot.C:'--';
-
-  populateTodayTable();
-}
-
-function populateTodayTable(){
-  const tbody=document.getElementById('tbodyToday');
-  tbody.innerHTML='';
-  const now=new Date();
-  const currMinutes=now.getHours()*60+now.getMinutes();
-  drawsToday.forEach(slot=>{
-    const [h,m]=slot.time.split(':').map(Number);
-    const slotMinutes=h*60+m;
-    if(slotMinutes<=currMinutes){
-      const tr=document.createElement('tr');
-      if(slotMinutes===Math.floor(currMinutes/SLOT_MIN)*SLOT_MIN) tr.className='live';
-      tr.innerHTML=`<td>${slot.time}</td><td>${slot.A}</td><td>${slot.B}</td><td>${slot.C}</td>`;
-      tbody.appendChild(tr);
+  // Check login logic
+  function checkLogin() {
+    const pass = document.getElementById('adminPass').value;
+    console.log("Password entered:", pass);
+    if (pass === adminPassword) {
+      document.getElementById('adminLogin').style.display = 'none';
+      document.getElementById('adminPanel').style.display = 'block';
+      populateAdmin();
+    } else {
+      console.log("Incorrect password entered.");
+      showMessageBox("Wrong password! Please try again.");
     }
-  });
-}
+  }
 
-// INITIAL
-generateDraws();
-updateLive();
-setInterval(updateLive,1000);
+  // Admin panel population
+  function populateAdmin() {
+    const list = document.getElementById('adminList');
+    list.innerHTML = '';
+    drawsToday.forEach((slot, i) => {
+      const div = document.createElement('div');
+      div.className = 'admin-item';
+      div.innerHTML = `
+        <div class="admin-time">${slot.time}</div>
+        <input type="text" value="${slot.A}" id="inputA${i}" maxlength="2" inputmode="numeric" pattern="[0-9]*">
+        <input type="text" value="${slot.B}" id="inputB${i}" maxlength="2" inputmode="numeric" pattern="[0-9]*">
+        <input type="text" value="${slot.C}" id="inputC${i}" maxlength="2" inputmode="numeric" pattern="[0-9]*">
+      `;
+      list.appendChild(div);
+    });
+  }
+
+  // Save admin changes to Supabase
+  async function saveAdmin() {
+    drawsToday.forEach((slot, i) => {
+      slot.A = document.getElementById(`inputA${i}`).value.padStart(2, '0');
+      slot.B = document.getElementById(`inputB${i}`).value.padStart(2, '0');
+      slot.C = document.getElementById(`inputC${i}`).value.padStart(2, '0');
+    });
+    
+    // Use upsert to update existing rows or insert new ones
+    const { error } = await supabase
+      .from('lottery_draws')
+      .upsert(drawsToday, { onConflict: ['date', 'time'] });
+
+    if (error) {
+      console.error("Error saving draws:", error);
+      showMessageBox("Error saving draws. Please try again.");
+    } else {
+      showMessageBox("Saved! Changes will be reflected live.");
+    }
+  }
+
+  // Reset today's draws
+  async function resetToday() {
+    const today = new Date().toISOString().split('T')[0];
+    const newDraws = generateDraws();
+    
+    // Delete existing rows for today
+    const { error: deleteError } = await supabase
+      .from('lottery_draws')
+      .delete()
+      .eq('date', today);
+      
+    if (deleteError) {
+      console.error("Error deleting old draws:", deleteError);
+      showMessageBox("Error resetting draws. Please try again.");
+      return;
+    }
+    
+    // Insert new draws for today
+    const { error: insertError } = await supabase
+      .from('lottery_draws')
+      .insert(newDraws);
+      
+    if (insertError) {
+      console.error("Error inserting new draws:", insertError);
+      showMessageBox("Error resetting draws. Please try again.");
+    } else {
+      showMessageBox("Today's draws have been reset.");
+    }
+  }
+
+  // Export CSV function (remains the same)
+  function exportCSV() {
+    let csv = "date,time,A,B,C\n";
+    drawsToday.forEach(d => csv += `${d.date},${d.time},${d.A},${d.B},${d.C}\n`);
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'draws.csv';
+    a.click();
+  }
+
+  function logoutAdmin() {
+    document.getElementById('adminPanel').style.display = 'none';
+    document.getElementById('adminLogin').style.display = 'flex';
+    document.getElementById('adminPass').value = '';
+  }
+
+  function showTab(tab) {
+    document.getElementById('live').style.display = tab === 'live' ? 'block' : 'none';
+    document.getElementById('history').style.display = tab === 'history' ? 'block' : 'none';
+    document.getElementById('admin').style.display = tab === 'admin' ? 'block' : 'none';
+    document.getElementById('tab-live').classList.toggle('active', tab === 'live');
+    document.getElementById('tab-history').classList.toggle('active', tab === 'history');
+    document.getElementById('tab-admin').classList.toggle('active', tab === 'admin');
+
+    if (tab === 'history') {
+      populatePastTable();
+    } else if (tab === 'admin') {
+      if (document.getElementById('adminPanel').style.display === 'block') {
+          populateAdmin();
+      }
+    }
+  }
+
+  function updateLive() {
+    const now = new Date();
+    document.getElementById('dateNow').textContent = now.toLocaleString();
+    const currMinutes = now.getHours() * 60 + now.getMinutes();
+
+    let nextSlotObj = null;
+    for (const slot of drawsToday) {
+      const [h, m] = slot.time.split(':').map(Number);
+      if (h * 60 + m > currMinutes) {
+        nextSlotObj = slot;
+        break;
+      }
+    }
+
+    if (nextSlotObj) {
+      const [h, m] = nextSlotObj.time.split(':').map(Number);
+      const nextDate = new Date();
+      nextDate.setHours(h);
+      nextDate.setMinutes(m);
+      nextDate.setSeconds(0);
+      nextDate.setMilliseconds(0);
+      const diff = Math.max(0, (nextDate - now) / 1000);
+      const mins = Math.floor(diff / 60), secs = Math.floor(diff % 60);
+      document.getElementById('countdown').textContent = `${pad2(mins)} : ${pad2(secs)}`;
+      document.getElementById('nextSlot').textContent = nextSlotObj.time;
+    } else {
+      document.getElementById('countdown').textContent = '-- : --';
+      document.getElementById('nextSlot').textContent = '--';
+    }
+
+    const liveSlot = drawsToday.find(slot => {
+      const [h, m] = slot.time.split(':').map(Number);
+      const currentSlotMinutes = Math.floor(now.getMinutes() / SLOT_MIN) * SLOT_MIN;
+      return now.getHours() === h && currentSlotMinutes === m;
+    });
+
+    document.getElementById('valA').textContent = liveSlot ? liveSlot.A : '--';
+    document.getElementById('valB').textContent = liveSlot ? liveSlot.B : '--';
+    document.getElementById('valC').textContent = liveSlot ? liveSlot.C : '--';
+
+    populateTodayTable();
+  }
+
+  function populateTodayTable() {
+    const tbody = document.getElementById('tbodyToday');
+    tbody.innerHTML = '';
+    const now = new Date();
+    const currMinutes = now.getHours() * 60 + now.getMinutes();
+    drawsToday.forEach(slot => {
+      const [h, m] = slot.time.split(':').map(Number);
+      const slotMinutes = h * 60 + m;
+      if (slotMinutes <= currMinutes) {
+        const tr = document.createElement('tr');
+        if (slotMinutes === Math.floor(currMinutes / SLOT_MIN) * SLOT_MIN) tr.className = 'live';
+        tr.innerHTML = `<td>${slot.time}</td><td>${slot.A}</td><td>${slot.B}</td><td>${slot.C}</td>`;
+        tbody.appendChild(tr);
+      }
+    });
+  }
+  
+  // Populate past draws table from Supabase
+  async function populatePastTable() {
+    const tbody = document.getElementById('tbodyPast');
+    tbody.innerHTML = '<tr><td colspan="5">Loading history...</td></tr>';
+    
+    try {
+        const { data, error } = await supabase
+          .from('lottery_draws')
+          .select('*')
+          .order('date', { ascending: false })
+          .order('time', { ascending: false });
+
+        if (error) {
+          console.error("Error fetching past draws:", error);
+          tbody.innerHTML = '<tr><td colspan="5">Error loading history.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = '';
+        if (data && data.length > 0) {
+            // Sort to ensure correct order
+            data.sort((a, b) => {
+                if (a.date === b.date) {
+                    return b.time.localeCompare(a.time);
+                }
+                return b.date.localeCompare(a.date);
+            });
+            
+            data.forEach(d => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${d.date}</td><td>${d.time}</td><td>${d.A}</td><td>${d.B}</td><td>${d.C}</td>`;
+                tbody.appendChild(tr);
+            });
+        } else {
+            tbody.innerHTML = '<tr><td colspan="5">No history available.</td></tr>';
+        }
+
+    } catch (e) {
+        console.error("Error fetching past draws: ", e);
+        tbody.innerHTML = '<tr><td colspan="5">Error loading history.</td></tr>';
+    }
+  }
+
+  // Initialize Supabase and set up real-time listener
+  window.onload = async function() {
+    try {
+      if (!SUPABASE_URL || !SUPABASE_ANON_KEY || SUPABASE_URL === 'YOUR_SUPABASE_URL') {
+        showMessageBox("Supabase configuration is missing. Please follow the instructions to get your URL and Anon Key.");
+        return;
+      }
+      
+      supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      
+      const today = new Date().toISOString().split('T')[0];
+      
+      // Fetch today's data first
+      const { data: todayData, error: fetchError } = await supabase
+        .from('lottery_draws')
+        .select('*')
+        .eq('date', today);
+        
+      if (fetchError) {
+          console.error("Error fetching today's draws:", fetchError);
+          showMessageBox("Error loading today's draws. Please check your Supabase setup.");
+          return;
+      }
+
+      if (todayData && todayData.length > 0) {
+          drawsToday = todayData;
+      } else {
+          // If no data for today, generate a new set and save
+          drawsToday = generateDraws();
+          await saveDrawsToSupabase();
+      }
+
+      // Set up real-time listener for today's draws
+      supabase
+        .channel('public:lottery_draws')
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'lottery_draws', filter: `date=eq.${today}` }, payload => {
+            console.log("Change received!", payload);
+            drawsToday = payload.new;
+            updateLive();
+            if (document.getElementById('adminPanel').style.display === 'block') {
+                populateAdmin();
+            }
+        })
+        .subscribe();
+        
+      // Set up the interval for the live countdown
+      setInterval(updateLive, 1000);
+
+    } catch (e) {
+        console.error("Supabase initialization failed:", e);
+        showMessageBox("Failed to connect to the database. Please check your internet connection and Supabase setup.");
+    }
+  }
+
+  // Expose functions to the global scope
+  window.checkLogin = checkLogin;
+  window.saveAdmin = saveAdmin;
+  window.resetToday = resetToday;
+  window.exportCSV = exportCSV;
+  window.logoutAdmin = logoutAdmin;
+  window.showTab = showTab;
+  window.closeMessageBox = closeMessageBox;
+
 </script>
 </body>
 </html>
